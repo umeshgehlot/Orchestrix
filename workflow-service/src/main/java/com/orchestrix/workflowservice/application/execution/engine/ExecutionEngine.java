@@ -1,0 +1,153 @@
+package com.orchestrix.workflowservice.application.execution.engine;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.orchestrix.workflowservice.application.execution.SystemNodeExecutor;
+import com.orchestrix.workflowservice.application.execution.event.TaskFailedEvent;
+import com.orchestrix.workflowservice.application.execution.event.TaskSucceededEvent;
+import com.orchestrix.workflowservice.application.execution.resolver.DependencyResolver;
+import com.orchestrix.workflowservice.application.execution.scheduler.NodeScheduler;
+import com.orchestrix.workflowservice.application.execution.state.TaskStateMachine;
+import com.orchestrix.workflowservice.application.execution.state.WorkflowStateMachine;
+import com.orchestrix.workflowservice.common.exception.BusinessException;
+import com.orchestrix.workflowservice.common.exception.ErrorCode;
+import com.orchestrix.workflowservice.domain.execution.TaskExecution;
+import com.orchestrix.workflowservice.domain.execution.WorkflowExecution;
+import com.orchestrix.workflowservice.domain.node.NodeType;
+import com.orchestrix.workflowservice.domain.node.WorkflowNode;
+import com.orchestrix.workflowservice.infrastructure.persistence.TaskExecutionRepository;
+import com.orchestrix.workflowservice.infrastructure.persistence.WorkflowExecutionRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class ExecutionEngine {
+    private final TaskExecutionRepository taskExecutionRepository;
+    private final WorkflowStateMachine workflowStateMachine;
+    private final DependencyResolver dependencyResolver;
+    private final NodeScheduler nodeScheduler;
+    private final TaskStateMachine taskStateMachine;
+    private final SystemNodeExecutor systemNodeExecutor;
+    private final WorkflowExecutionRepository workflowExecutionRepository;
+    private final ObjectMapper objectMapper;
+
+    @Transactional
+    public void handleTaskCompleted(TaskExecution taskExecution) {
+        log.info(
+                "ExecutionEngine handling {}",
+                taskExecution.getNode().getNodeType()
+        );
+
+        List<WorkflowNode> runnableNodes =  dependencyResolver.resolveNextNodes(
+                taskExecution);
+
+        log.info(
+                "Resolved next nodes {}",
+                runnableNodes.stream()
+                        .map(WorkflowNode::getNodeType)
+                        .toList()
+        );
+
+        if (runnableNodes.isEmpty()) {
+            WorkflowExecution workflowExecution = taskExecution.getWorkflowExecution();
+            workflowStateMachine.completeWorkflowExecution(
+                    workflowExecution
+            );
+            workflowExecutionRepository.save(workflowExecution);
+            log.info(
+                    "WorkflowExecution={} completed successfully",
+                    taskExecution.getWorkflowExecution().getId()
+            );
+            return;
+        }
+
+        for (WorkflowNode node : runnableNodes) {
+
+            if (node.getNodeType() == NodeType.START ||
+                    node.getNodeType() == NodeType.END) {
+
+                TaskExecution nextTask =
+                        taskExecutionRepository
+                                .findByWorkflowExecutionIdAndNodeId(
+                                        taskExecution.getWorkflowExecution().getId(),
+                                        node.getId()
+                                )
+                                .orElseThrow(() ->
+                                        new BusinessException(ErrorCode.TASK_EXECUTION_NOT_FOUND));
+
+                systemNodeExecutor.execute(nextTask);
+                taskExecutionRepository.save(nextTask);
+                handleTaskCompleted(nextTask);
+
+            } else {
+
+                nodeScheduler.schedule(
+                        taskExecution.getWorkflowExecution(),
+                        node
+                );
+            }
+        }
+        log.info(
+                "WorkflowExecution={} | Completed Node={} | Next Nodes={}",
+                taskExecution.getWorkflowExecution().getId(),
+                taskExecution.getNode().getNodeType(),
+                runnableNodes.stream()
+                        .map(WorkflowNode::getNodeType)
+                        .toList()
+        );
+    }
+
+    @Transactional
+    public void handleTaskCompleted(TaskSucceededEvent event) {
+
+        TaskExecution taskExecution =
+                taskExecutionRepository.findById(event.taskExecutionId())
+                        .orElseThrow(() ->
+                                new BusinessException(ErrorCode.TASK_EXECUTION_NOT_FOUND));
+
+        try {
+            JsonNode output;
+
+            if (event.message() == null) {
+                output = objectMapper.nullNode();
+            } else {
+                try {
+                    // If the worker returned valid JSON, preserve it as JSON.
+                    output = objectMapper.readTree(event.message());
+                } catch (Exception e) {
+                    // Otherwise treat the worker result as plain text.
+                    output = objectMapper.valueToTree(event.message());
+                }
+            }
+
+            taskExecution.setOutput(output);
+
+        } catch (Exception e) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_TASK_OUTPUT
+            );
+        }
+        taskStateMachine.completeTaskExecution(taskExecution);
+        taskExecutionRepository.save(taskExecution);
+        handleTaskCompleted(taskExecution);
+    }
+
+    @Transactional
+    public void handleTaskFailed(TaskFailedEvent event) {
+        TaskExecution taskExecution =
+                taskExecutionRepository.findById(event.taskExecutionId())
+                        .orElseThrow(() ->
+                                new BusinessException(ErrorCode.TASK_EXECUTION_NOT_FOUND));
+        WorkflowExecution workflowExecution = taskExecution.getWorkflowExecution();
+        taskStateMachine.failTaskExecution(taskExecution, event.message());
+        taskExecutionRepository.save(taskExecution);
+        workflowStateMachine.failWorkflowExecution(workflowExecution,taskExecution.getErrorMessage());
+        workflowExecutionRepository.save(workflowExecution);
+    }
+}

@@ -1,0 +1,31 @@
+# IntelliJ
+.idea/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.*
+terraform/terraform.tfvars
+
+# Root terraform state
+terraform.tfstate
+terraform.tfstate.*
+*.tfstate
+*.tfstate.*
+
+crash.log
+
+# Maven
+**/target/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/

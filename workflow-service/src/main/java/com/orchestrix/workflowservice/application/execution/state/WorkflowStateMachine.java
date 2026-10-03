@@ -1,0 +1,62 @@
+package com.orchestrix.workflowservice.application.execution.state;
+
+import com.orchestrix.workflowservice.common.exception.BusinessException;
+import com.orchestrix.workflowservice.common.exception.ErrorCode;
+import com.orchestrix.workflowservice.domain.execution.WorkflowExecution;
+import com.orchestrix.workflowservice.domain.execution.WorkflowExecutionStatus;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+import java.time.Instant;
+
+@Component
+@Slf4j
+public class WorkflowStateMachine {
+
+    public void startWorkflowExecution(WorkflowExecution execution) {
+        if (execution.getStatus() != WorkflowExecutionStatus.PENDING) {
+            throw new BusinessException(ErrorCode.INVALID_WORKFLOW_STATE_TRANSITION);
+        }
+
+        log.info("INSIDE BEFORE -> status={}, startedAt={}",
+                execution.getStatus(),
+                execution.getStartedAt());
+
+        execution.setStatus(WorkflowExecutionStatus.RUNNING);
+
+        execution.setStartedAt(Instant.now());
+        log.info("INSIDE AFTER -> status={}, startedAt={}",
+                execution.getStatus(),
+                execution.getStartedAt());
+
+    }
+
+    public void completeWorkflowExecution(WorkflowExecution execution) {
+
+        if (execution.getStatus() != WorkflowExecutionStatus.RUNNING) {
+            throw new BusinessException(ErrorCode.INVALID_WORKFLOW_STATE_TRANSITION);
+        }
+        execution.setStatus(WorkflowExecutionStatus.COMPLETED);
+        execution.setCompletedAt(Instant.now());
+
+    }
+
+    public void failWorkflowExecution(
+            WorkflowExecution execution,
+            String reason
+    ) {
+
+        if (execution.getStatus() != WorkflowExecutionStatus.RUNNING) {
+            throw new BusinessException(ErrorCode.INVALID_WORKFLOW_STATE_TRANSITION);
+        }
+        execution.setStatus(WorkflowExecutionStatus.FAILED);
+        execution.setCompletedAt(Instant.now());
+
+
+        log.error(
+                "Workflow {} failed : {}",
+                execution.getId(),
+                reason
+        );
+    }
+}
