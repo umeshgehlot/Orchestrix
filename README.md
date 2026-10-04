@@ -200,3 +200,4 @@ k6 run <load-test-script>
 ## Engineering Highlights
 
 Building Orchestrix meant working through DAG validation and scheduling algorithms, decoupling orchestration from execution over Kafka with retry/DLQ semantics, multi-service auth and service discovery, and standing up a full observability and Kubernetes deployment pipeline — then measuring the actual cost of each layer with JMH and k6 rather than assuming it would scale.
+# Orchestrix
